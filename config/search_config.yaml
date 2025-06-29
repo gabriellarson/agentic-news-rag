@@ -1,0 +1,128 @@
+# Configuration for Agentic News RAG System
+
+# LLM Configuration
+llm:
+  endpoint: "http://localhost:8001/v1"  # Your llama.cpp server endpoint
+  model: "D:\\AI\\GGUFs\\Qwen3-30B-A3B-UD-Q4_K_XL.gguf"  # Full model path as returned by server
+  temperature: 0.3
+  max_tokens: 2000
+  timeout: 60  # Request timeout in seconds
+  # Note: This model has thinking mode enabled
+  # - reasoning_content: Contains the thinking process (ignored)
+  # - content: Contains the final answer after thinking (what we use)
+  # - Must use n=1 parameter to force content output
+
+# Embedding Configuration
+embeddings:
+  model_name: "Qwen/Qwen3-Embedding-0.6B"
+  batch_size: 32
+  device: "cuda"  # or "cpu"
+  normalize: true
+  max_sequence_length: 512
+
+# Qdrant Vector Database Configuration
+qdrant:
+  host: "localhost"
+  port: 6333
+  collection_name: "news_articles"
+  on_disk: true
+  timeout: 30
+
+# Search Configuration
+search:
+  hybrid:
+    alpha: 0.65  # Default weight for dense vs sparse (0.0 = pure sparse, 1.0 = pure dense)
+    default_limit: 20
+    max_limit: 100
+    score_threshold: 0.5
+  
+  sparse:
+    max_features: 10000
+    ngram_range: [1, 2]
+    min_df: 2
+    max_df: 0.95
+    use_idf: true
+  
+  temporal:
+    enable_reranking: true
+    decay_half_life_days: 30
+    temporal_weight: 0.3
+    
+  performance:
+    enable_cache: true
+    cache_size: 1000
+    cache_ttl_seconds: 3600
+    batch_timeout_ms: 100
+
+# Query Analysis Configuration
+query_analysis:
+  max_expanded_queries: 5
+  entity_extraction:
+    enabled: true
+    confidence_threshold: 0.8
+  temporal_extraction:
+    enabled: true
+    default_window_days: 30
+  query_classification:
+    enabled: true
+    # Alpha weights for different query types
+    type_weights:
+      factual: 0.4
+      entity: 0.3
+      conceptual: 0.8
+      temporal: 0.6
+      comparative: 0.7
+      default: 0.65
+
+# Information Extraction Configuration
+extraction:
+  max_articles_per_query: 10
+  temporal_window_days: 30
+  confidence_threshold: 0.7
+  batch_size: 5
+  enable_coreference_resolution: true
+
+# Timeline Construction Configuration
+timeline:
+  min_event_confidence: 0.6
+  merge_similar_events: true
+  similarity_threshold: 0.85
+  max_events_per_timeline: 50
+
+# Report Generation Configuration
+reporting:
+  max_report_length: 2000
+  include_citations: true
+  include_confidence_scores: true
+  summary_style: "detailed"  # "concise" or "detailed"
+  citation_format: "inline"  # "inline" or "endnotes"
+
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 8000
+  cors_origins: ["*"]
+  rate_limit:
+    enabled: true
+    requests_per_minute: 60
+
+# Logging Configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/news_rag.log"
+  max_file_size_mb: 100
+  backup_count: 5
+
+# Data Paths
+paths:
+  articles_dir: "text_articles/"
+  cache_dir: "cache/"
+  logs_dir: "logs/"
+  models_dir: "models/"
+
+# Development Settings
+development:
+  debug_mode: true
+  profile_performance: false
+  test_mode: false
