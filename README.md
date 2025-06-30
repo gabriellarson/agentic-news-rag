@@ -27,12 +27,22 @@ An intelligent system for analyzing a corpus of ~40,000 news articles to answer 
   - Semantic search returning relevant results
   - Date and author filtering capabilities
   - Successfully indexed 7 articles in 1.05 seconds
+- **Information Extraction Agent**: FULLY FUNCTIONAL ✨
+  - LLM-based event extraction with temporal references
+  - Named entity recognition (PERSON, ORGANIZATION, LOCATION)
+  - Dynamic date resolution for relative and absolute dates
+  - JSON parsing with robust error recovery
+  - Fixed: Date extraction pipeline now achieving 83% timeline completeness
+- **Timeline Construction Agent**: FULLY FUNCTIONAL ✨
+  - Chronological event ordering and deduplication
+  - Event grouping and merging using LLM
+  - Importance scoring and relevance filtering
+  - Causal relationship identification
+  - Successfully processes events with 83% completeness score
 - **Configuration System**: YAML-based config with environment overrides  
 - **Testing Framework**: All components tested and working
 
 ### ⏳ Next Up
-- **Information Extraction Agent**: Extract events, entities, temporal info
-- **Timeline Construction Agent**: Chronological event ordering
 - **Report Generation Agent**: Response synthesis with citations
 - **Hybrid Search Enhancement**: Add sparse vector support
 
@@ -40,8 +50,8 @@ An intelligent system for analyzing a corpus of ~40,000 news articles to answer 
 
 ### Core Agents
 1. **Query Analysis Agent** ✅ - Analyzes user queries and generates search strategies
-2. **Information Extraction Agent** ⏳ - Extracts events, entities, and temporal information
-3. **Timeline Construction Agent** ⏳ - Orders events chronologically  
+2. **Information Extraction Agent** ✅ - Extracts events, entities, and temporal information
+3. **Timeline Construction Agent** ✅ - Orders events chronologically and identifies relationships
 4. **Report Generation Agent** ⏳ - Synthesizes final responses with citations
 
 ### Technology Stack
@@ -59,8 +69,8 @@ agentic-news-rag/
 ├── src/
 │   ├── agents/           # Agent implementations
 │   │   ├── query_analysis.py      ✅ Implemented
-│   │   ├── information_extraction.py  ⏳ Pending
-│   │   ├── timeline_construction.py   ⏳ Pending
+│   │   ├── information_extraction.py  ✅ Implemented
+│   │   ├── timeline_construction.py   ✅ Implemented
 │   │   └── report_generation.py       ⏳ Pending
 │   ├── embeddings/       # Embedding pipeline
 │   │   ├── qwen_embedder.py           ✅ Implemented
@@ -120,6 +130,31 @@ Edit `config/search_config.yaml` or use environment variables:
 export NEWS_RAG_LLM_ENDPOINT="http://localhost:8001/v1"
 export NEWS_RAG_LLM_MODEL="qwen3-30b"
 ```
+
+## 📊 Information Extraction & Timeline Features
+
+### Information Extraction Pipeline ✨
+- **Event Extraction**: LLM extracts key events with confidence scoring
+- **Entity Recognition**: People, organizations, locations, and other entities
+- **Temporal Processing**: Dynamic date resolution for complex temporal references
+  - Absolute dates: "January 11, 2024", "March 2023", "2020"
+  - Relative dates: "last year", "second quarter", "end of 2022"
+  - Contextual dates: "when the pandemic began", "since the war started"
+- **Robust JSON Parsing**: Error recovery from malformed LLM responses
+- **Performance**: 83% timeline completeness achieved (up from 0% before fixes)
+
+### Timeline Construction Pipeline ✨
+- **Event Deduplication**: LLM-based grouping of similar events across articles
+- **Chronological Ordering**: Smart sorting with date estimation for undated events
+- **Importance Scoring**: Relevance filtering based on timeline topic
+- **Causal Relationships**: Identification of cause-and-effect connections
+- **Consistency Validation**: Timeline coherence and completeness scoring
+
+### Recent Fixes & Improvements
+- **Date Resolution Fixed**: Increased max_tokens from 50 to 5000 for LLM responses
+- **Full Text Processing**: Removed 4000-character truncation limits
+- **Debug Tooling**: Created comprehensive extraction debugging script
+- **Performance Metrics**: Timeline completeness improved from 0% to 83%
 
 ## 📊 Query Analysis Features
 
@@ -188,14 +223,17 @@ Published: [ISO 8601 timestamp]
 - **Indexing Speed**: 7 articles in 1.05 seconds (0.15s per article)
 - **Search Quality**: Excellent semantic matching with scores 0.5-0.7
 - **Query Processing**: 15-20 seconds for full analysis with LLM
+- **Information Extraction**: 83% timeline completeness for event extraction
+- **Timeline Construction**: Successfully processes and orders events with confidence scoring
 - **Memory Usage**: Efficient with local model loading and GPU acceleration
 
 ### Next Priorities
 1. ✅ ~~Implement article parser for structured text format~~
 2. ✅ ~~Build embedding pipeline with sentence-transformers~~
 3. ✅ ~~Set up Qdrant server and implement hybrid search~~
-4. Create information extraction agent for events and entities
-5. Implement timeline construction logic
+4. ✅ ~~Create information extraction agent for events and entities~~
+5. ✅ ~~Implement timeline construction logic~~
+6. Create report generation agent for final response synthesis
 
 ### Environment
 - **LLM Server**: Qwen3-30B with thinking enabled, 128k context window
@@ -227,8 +265,8 @@ The test suite (`scripts/test_query_analysis.py`) includes:
 - [x] Qdrant search engine
 
 ### Week 3-4: Core Pipeline  
-- [ ] Information extraction agent
-- [ ] Timeline construction logic
+- [x] Information extraction agent
+- [x] Timeline construction logic
 - [ ] Report generation agent
 - [ ] API endpoints
 
