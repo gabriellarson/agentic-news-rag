@@ -21,12 +21,14 @@ import re
 try:
     from ..config import get_config
     from .information_extraction import ExtractedEvent, ExtractedEntity
+    from ..llm.interface import LLMInterface
 except ImportError:
     # Handle direct execution
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from config import get_config
     from agents.information_extraction import ExtractedEvent, ExtractedEntity
+    from llm.interface import LLMInterface
 
 logger = logging.getLogger(__name__)
 
@@ -69,27 +71,15 @@ class TimelineConstructionAgent:
             config = get_config()
             
         self.config = config
-        self.llm_endpoint = config.get('llm', 'endpoint', default='http://localhost:8001/v1')
-        self.llm_model = config.get('llm', 'model', default='qwen3-30b')
         
         # Timeline configuration
         self.max_timeline_events = config.get('timeline', 'max_events', default=50)
         self.min_confidence = config.get('timeline', 'min_confidence', default=0.5)
         self.merge_threshold = config.get('timeline', 'merge_threshold', default=0.8)
         
-        # Initialize LLM client
-        try:
-            from openai import OpenAI
-            if OpenAI is None:
-                raise ImportError("OpenAI package required")
-            
-            self.client = OpenAI(
-                base_url=self.llm_endpoint,
-                api_key="not-needed"
-            )
-            logger.info(f"Initialized LLM client for timeline construction")
-        except ImportError:
-            raise ImportError("OpenAI package is required for timeline construction. Install with: pip install openai")
+        # Initialize LLM interface
+        self.llm = LLMInterface(config)
+        logger.info(f"Initialized timeline construction agent")
     
     def construct_timeline(self, extracted_events: List[Dict[str, Any]], 
                           topic: str = "General Timeline") -> Timeline:
@@ -209,16 +199,12 @@ class TimelineConstructionAgent:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=5000,
+            groups_data = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                n=1
+                max_tokens=5000,
+                output_type="json_array"
             )
-            
-            content = response.choices[0].message.content
-            groups_data = self._extract_json_from_text(content, "groups")
             
             # Convert indices to event groups
             groups = []
@@ -293,16 +279,12 @@ class TimelineConstructionAgent:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=2000,
+            merge_data = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                n=1
+                max_tokens=10000,
+                output_type="json_object"
             )
-            
-            content = response.choices[0].message.content
-            merge_data = self._extract_json_from_text(content, "merge")
             
             if not merge_data or not isinstance(merge_data, dict):
                 logger.warning(f"Failed to extract merge data, using fallback")
@@ -419,18 +401,14 @@ class TimelineConstructionAgent:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1000,
+            estimate_data = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                n=1
+                max_tokens=1000,
+                output_type="json_object"
             )
             
-            content = response.choices[0].message.content
-            estimate_data = self._extract_json_from_text(content, "estimate")[0]
-            
-            if estimate_data.get('estimated_date'):
+            if isinstance(estimate_data, dict) and estimate_data.get('estimated_date'):
                 try:
                     return datetime.fromisoformat(estimate_data['estimated_date'])
                 except ValueError:
@@ -485,16 +463,12 @@ class TimelineConstructionAgent:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=10000,  # Increased for complex relationship analysis
+            relationships = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                n=1
+                max_tokens=10000,
+                output_type="json_array"
             )
-            
-            content = response.choices[0].message.content
-            relationships = self._extract_json_from_text(content, "relationships")
             
             # Apply relationships to events
             for rel in relationships:
@@ -544,16 +518,12 @@ class TimelineConstructionAgent:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=5000,
+            scores = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                n=1
+                max_tokens=10000,
+                output_type="json_array"
             )
-            
-            content = response.choices[0].message.content
-            scores = self._extract_json_from_text(content, "scores")
             
             # Apply scores
             for score_data in scores:
@@ -647,51 +617,6 @@ class TimelineConstructionAgent:
         # Simple consistency check
         return 0.9  # Placeholder - could be enhanced with more sophisticated checks
     
-    def _extract_json_from_text(self, text: str, data_type: str) -> Any:
-        """Extract JSON from LLM response"""
-        import re
-        
-        # First try to parse the entire response as JSON
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-        
-        # Try to find JSON object for merge operations
-        if data_type == "merge":
-            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
-                try:
-                    return json.loads(json_str)
-                except json.JSONDecodeError:
-                    pass
-        
-        # Try to find JSON array in the response
-        json_match = re.search(r'\[.*\]', text, re.DOTALL)
-        if not json_match:
-            logger.warning(f"No JSON found in {data_type} response: {text[:200]}...")
-            return [] if data_type != "merge" else {}
-        
-        json_str = json_match.group(0)
-        
-        # Clean common JSON formatting issues
-        fixes = [
-            (r',\s*}', '}'),
-            (r',\s*]', ']'),
-            (r'\\n', ' '),
-            (r'\\"', '"'),
-            (r'"\s*\n\s*"', '"'),
-        ]
-        
-        for pattern, replacement in fixes:
-            json_str = re.sub(pattern, replacement, json_str)
-        
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Could not parse {data_type} JSON after cleaning: {e}")
-            return [] if data_type != "merge" else {}
 
 
 # Example usage and testing

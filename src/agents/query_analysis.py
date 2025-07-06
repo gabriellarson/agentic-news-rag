@@ -15,16 +15,17 @@ from dataclasses import dataclass
 from enum import Enum
 import json
 import logging
-from openai import OpenAI
 
 try:
     from ..config import get_config
+    from ..llm.interface import LLMInterface
 except ImportError:
     # Handle direct execution
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from config import get_config
+    from llm.interface import LLMInterface
 
 logger = logging.getLogger(__name__)
 
@@ -85,15 +86,8 @@ class QueryAnalysisAgent:
         
         self.config = config
         
-        # Get LLM configuration
-        llm_config = config.get_llm_config()
-        self.client = OpenAI(
-            base_url=llm_config.get('endpoint', 'http://localhost:8001/v1'),
-            api_key="not-needed"  # Local server doesn't need API key
-        )
-        self.model = llm_config.get('model', 'qwen3-30b')
-        self.temperature = llm_config.get('temperature', 0.3)
-        self.max_tokens = llm_config.get('max_tokens', 2000)
+        # Initialize LLM interface
+        self.llm = LLMInterface(config)
         
         # Get query analysis configuration
         qa_config = config.get_query_analysis_config()
@@ -173,25 +167,40 @@ Categories:
 Answer with only one word: FACTUAL, CONCEPTUAL, TEMPORAL, ENTITY, or COMPARATIVE"""
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+            content = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                max_tokens=10000,  # Large limit to allow full thinking + answer
-                n=1  # Force content output after thinking
+                max_tokens=1000,
+                output_type="text"
             )
             
-            # Only use the content field (output after thinking)
-            content = response.choices[0].message.content or ""
-            category = content.strip().upper()
+            # Extract the last word that matches our categories
+            # Split by lines and look for category words
+            lines = content.strip().split('\n')
+            category = None
             
-            # Map to enum
+            # Try each line, looking for a valid category
+            for line in reversed(lines):
+                line = line.strip().upper()
+                # Check if this line contains a valid category
+                for query_type in QueryType:
+                    if query_type.name in line:
+                        # Found a category in this line
+                        # Extract just the category word
+                        words = line.split()
+                        for word in words:
+                            if word == query_type.name:
+                                return query_type
+            
+            # If no match found in structured parsing, try simple extraction
+            # Look for the first occurrence of any category word
+            content_upper = content.upper()
             for query_type in QueryType:
-                if query_type.name == category:
+                if query_type.name in content_upper:
                     return query_type
             
             # Default to conceptual if no match
-            logger.warning(f"Unknown query category '{category}', defaulting to CONCEPTUAL")
+            logger.warning(f"Unknown query category in response: '{content[:100]}...', defaulting to CONCEPTUAL")
             return QueryType.CONCEPTUAL
             
         except Exception as e:
@@ -213,39 +222,28 @@ Find all:
 - Organization names
 - Location names
 
-Return as JSON array. Examples:
-["Apple Inc.", "Tim Cook", "California"]
+Return ONLY a JSON array with the entities. No explanations.
+
+Examples:
+Query: "Apple CEO Tim Cook visited California"
+["Apple", "Tim Cook", "California"]
+
+Query: "What happened yesterday?"
 []
 
 Query: "{query}"
 JSON array:"""
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+            entities = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                max_tokens=10000,  # Large limit to allow full thinking + answer
-                n=1  # Force content output after thinking
+                max_tokens=1000,
+                output_type="json_array"
             )
             
-            content = response.choices[0].message.content.strip()
-            
-            # Try to parse JSON directly
-            try:
-                entities = json.loads(content)
-                return entities if isinstance(entities, list) else []
-            except json.JSONDecodeError:
-                # Extract JSON from response if wrapped in text
-                if '[' in content and ']' in content:
-                    json_str = content[content.find('['):content.rfind(']')+1]
-                    try:
-                        entities = json.loads(json_str)
-                        return entities if isinstance(entities, list) else []
-                    except json.JSONDecodeError:
-                        pass
-                
-                return []
+            # Filter out any non-string entries and clean up
+            return [str(e).strip() for e in entities if e and str(e).strip()]
             
         except Exception as e:
             logger.error(f"Error extracting entities: {e}")
@@ -304,45 +302,39 @@ Find any explicit dates like:
 - Months/years (March 2023)
 - Date ranges (between X and Y)
 
-Return JSON:
-{{"start_date": "YYYY-MM-DD or null", "end_date": "YYYY-MM-DD or null", "date_mentions": []}}
+Return ONLY a JSON object with dates in YYYY-MM-DD format:
+{{"start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD", "date_mentions": ["date1", "date2"]}}
 
-If no dates: {{"start_date": null, "end_date": null, "date_mentions": []}}
+If no dates found, return:
+{{"start_date": null, "end_date": null, "date_mentions": []}}
 
 JSON:"""
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+            date_info = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                max_tokens=10000,  # Large limit to allow full thinking + answer
-                n=1  # Force content output after thinking
+                max_tokens=1000,
+                output_type="json_object"
             )
             
-            content = response.choices[0].message.content.strip()
-            
-            try:
-                date_info = json.loads(content)
-            except json.JSONDecodeError:
-                if '{' in content and '}' in content:
-                    json_str = content[content.find('{'):content.rfind('}')+1]
-                    try:
-                        date_info = json.loads(json_str)
-                    except json.JSONDecodeError:
-                        return constraint
-                else:
-                    return constraint
-            
-            if date_info.get('start_date') and date_info['start_date'] != 'null':
+            # Process start_date
+            if date_info.get('start_date') and date_info['start_date'] not in ['null', None, 'None']:
                 try:
-                    constraint.start_date = datetime.fromisoformat(date_info['start_date'])
-                except ValueError:
+                    # Handle various date formats
+                    date_str = str(date_info['start_date']).strip()
+                    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+                        constraint.start_date = datetime.fromisoformat(date_str)
+                except (ValueError, TypeError):
                     pass
-            if date_info.get('end_date') and date_info['end_date'] != 'null':
+            
+            # Process end_date
+            if date_info.get('end_date') and date_info['end_date'] not in ['null', None, 'None']:
                 try:
-                    constraint.end_date = datetime.fromisoformat(date_info['end_date'])
-                except ValueError:
+                    date_str = str(date_info['end_date']).strip()
+                    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+                        constraint.end_date = datetime.fromisoformat(date_str)
+                except (ValueError, TypeError):
                     pass
                     
         except Exception as e:
@@ -365,41 +357,98 @@ JSON:"""
             QueryType.COMPARATIVE: "Include comparison terms and contrasting elements"
         }
         
-        prompt = f"""Generate 3-4 alternative search queries for news articles about: "{query}"
+        prompt = f"""Generate exactly 4 concise alternative search queries for: "{query}"
 
 Guidelines: {type_guidance.get(query_type, '')}
 
-Return only the queries, one per line:
-1. {query}
-2.
-3.
-4.
-5."""
+IMPORTANT: Each query must be:
+- Short and concise (max 10-15 words)
+- A complete search query
+- Different from the original but related
+- No explanations or bullet points
+
+Format your response as a simple numbered list:
+1. [query 1]
+2. [query 2]
+3. [query 3]
+4. [query 4]
+
+Do not include anything else in your response."""
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+            content = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.5,
-                max_tokens=10000,  # Large limit to allow full thinking + answer
-                n=1  # Force content output after thinking
+                max_tokens=2000,
+                output_type="text"
             )
-            
-            content = response.choices[0].message.content.strip()
             
             # Parse queries from response
             for line in content.split('\n'):
                 line = line.strip()
-                if line and not line.startswith('#') and len(line) > 10:
-                    # Remove numbering if present
-                    line = re.sub(r'^\d+[\.\)]\s*', '', line)
-                    # Remove quotes if present
-                    line = line.strip('"\'')
-                    if line and line not in expanded:
-                        expanded.append(line)
+                
+                # Skip empty lines and very short lines
+                if not line or len(line) < 5:
+                    continue
+                
+                # Remove numbering (1., 2), etc.
+                line = re.sub(r'^\d+[\.\)]\s*', '', line)
+                
+                # Remove quotes and extra punctuation
+                line = line.strip('"\'')
+                
+                # Skip lines that are explanations or too long
+                if any(keyword in line.lower() for keyword in ['okay', 'the user', 'let me', 'first', 'alternative']):
+                    continue
+                
+                # Skip extremely long lines (likely not queries)
+                if len(line) > 150:
+                    continue
+                
+                # Skip lines with bullet points or special formatting
+                if line.startswith(('*', '-', '•', '🔹', '🔸')):
+                    # Extract the actual query part after the bullet
+                    line = re.sub(r'^[\*\-•🔹🔸]\s*', '', line)
+                
+                # Add to expanded if it's a valid query
+                if line and line not in expanded and 10 <= len(line) <= 150:
+                    expanded.append(line)
+                    
+                    # Stop if we have enough queries
+                    if len(expanded) >= self.max_expanded_queries:
+                        break
             
-            # Limit based on configuration
-            return expanded[:self.max_expanded_queries]
+            # If we didn't get enough expansions, try a simpler approach
+            if len(expanded) < 3:
+                # Generate simple variations
+                if query_type == QueryType.FACTUAL:
+                    expanded.append(f"latest news {query}")
+                    expanded.append(f"{query} recent developments")
+                elif query_type == QueryType.CONCEPTUAL:
+                    expanded.append(f"{query} trends analysis")
+                    expanded.append(f"{query} industry impact")
+                elif query_type == QueryType.TEMPORAL:
+                    expanded.append(f"{query} timeline")
+                    expanded.append(f"chronology {query}")
+                elif query_type == QueryType.ENTITY and entities:
+                    for entity in entities[:2]:
+                        expanded.append(f"{entity} news {query.replace(entity, '')}")
+                elif query_type == QueryType.COMPARATIVE:
+                    expanded.append(f"{query} comparison analysis")
+                    expanded.append(f"{query} differences similarities")
+            
+            # Ensure uniqueness and limit
+            unique_expanded = []
+            seen = set()
+            for q in expanded:
+                q_lower = q.lower().strip()
+                if q_lower not in seen:
+                    seen.add(q_lower)
+                    unique_expanded.append(q)
+                    if len(unique_expanded) >= self.max_expanded_queries:
+                        break
+            
+            return unique_expanded
             
         except Exception as e:
             logger.error(f"Error expanding query: {e}")

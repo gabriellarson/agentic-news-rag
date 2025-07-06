@@ -159,3 +159,8 @@ credentials.json
 *.tmp
 *.temp
 *.bak
+
+Qwen3-Embedding-0.6B/
+.claude/
+complex_query_report.md
+WORKFLOW_DIAGRAM.md

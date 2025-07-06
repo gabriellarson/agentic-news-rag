@@ -18,7 +18,7 @@ class Config:
         if config_path is None:
             # Default config path relative to project root
             project_root = Path(__file__).parent.parent
-            config_path = project_root / "config" / "search_config.yaml"
+            config_path = project_root / "search_config.yaml"
         
         self.config_path = Path(config_path)
         self._config = self._load_config()

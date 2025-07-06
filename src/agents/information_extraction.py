@@ -10,27 +10,24 @@ Extracts structured information from retrieved articles including:
 
 import json
 import logging
+import uuid
 from typing import List, Dict, Optional, Any, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
 import re
 from dataclasses import dataclass
 
-# Import OpenAI for LLM integration
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
-
 try:
     from ..config import get_config
     from ..embeddings.article_parser import Article
+    from ..llm.interface import LLMInterface
 except ImportError:
     # Handle direct execution
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from config import get_config
     from embeddings.article_parser import Article
+    from llm.interface import LLMInterface
 
 logger = logging.getLogger(__name__)
 
@@ -75,20 +72,11 @@ class InformationExtractionAgent:
             config = get_config()
             
         self.config = config
-        self.llm_endpoint = config.get('llm', 'endpoint', default='http://localhost:8001/v1')
-        self.llm_model = config.get('llm', 'model', default='qwen3-30b')
         self.confidence_threshold = config.get('extraction', 'confidence_threshold', default=0.7)
         
-        # Initialize LLM client
-        if OpenAI is None:
-            logger.error("OpenAI package not found. Install with: pip install openai")
-            raise ImportError("OpenAI package is required for information extraction. Install with: pip install openai")
-        
-        self.client = OpenAI(
-            base_url=self.llm_endpoint,
-            api_key="not-needed"  # llama.cpp doesn't require API key
-        )
-        logger.info(f"Initialized LLM client for {self.llm_endpoint}")
+        # Initialize LLM interface
+        self.llm = LLMInterface(config)
+        logger.info(f"Initialized information extraction agent")
     
     def extract_from_article(self, article: Article) -> Dict[str, Any]:
         """
@@ -139,12 +127,62 @@ class InformationExtractionAgent:
         
         return results
     
+    def extract_from_articles_with_cache(self, articles: List[Article], search_engine=None) -> List[Dict[str, Any]]:
+        """
+        Extract information from multiple articles using cache when available.
+        
+        Args:
+            articles: List of parsed articles
+            search_engine: QdrantHybridSearch instance for cache operations
+            
+        Returns:
+            List of extraction results
+        """
+        if not search_engine:
+            # Fallback to normal extraction if no search engine provided
+            return self.extract_from_articles(articles)
+        
+        results = []
+        to_process = []
+        cache_hits = 0
+        
+        # Check cache for each article
+        for article in articles:
+            article_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, str(article.file_path)))
+            
+            # Check if extraction is cached
+            cached_data = search_engine.get_extraction_metadata(article_id)
+            
+            if cached_data and cached_data.get('extraction_result'):
+                # Use cached result
+                cached_result = cached_data['extraction_result']
+                results.append(cached_result)
+                cache_hits += 1
+                logger.info(f"Using cached extraction for: {article.title}")
+            else:
+                # Need to process this article
+                to_process.append((article, article_id))
+        
+        logger.info(f"Cache performance: {cache_hits} hits, {len(to_process)} misses")
+        
+        # Process articles that need extraction
+        for article, article_id in to_process:
+            try:
+                result = self.extract_from_article(article)
+                results.append(result)
+                
+                # Cache the result
+                search_engine.update_extraction_metadata(article_id, result)
+                
+                logger.info(f"Extracted and cached info from: {article.title}")
+            except Exception as e:
+                logger.error(f"Failed to extract from {article.title}: {e}")
+                continue
+        
+        return results
+    
     def _extract_events(self, text: str, article_id: str) -> List[ExtractedEvent]:
         """Extract events using LLM"""
-        if not self.client:
-            logger.error("LLM client not initialized - cannot extract events")
-            return []
-        
         logger.info("Extracting events using LLM...")
         
         prompt = f"""
@@ -180,26 +218,12 @@ class InformationExtractionAgent:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=4000,
+            events_data = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                n=1
+                max_tokens=40000,
+                output_type="json_array"
             )
-            
-            content = response.choices[0].message.content
-            logger.debug(f"Raw event response: {content[:200]}...")
-            
-            # Try to extract JSON from response
-            try:
-                events_data = json.loads(content)
-            except json.JSONDecodeError as e:
-                logger.warning(f"JSON parse error: {e}")
-                # Try to extract and clean JSON from response
-                events_data = self._extract_json_from_text(content, "events")
-                if not events_data:
-                    return []
             
             events = []
             for event_data in events_data:
@@ -231,10 +255,6 @@ class InformationExtractionAgent:
     
     def _extract_entities(self, text: str, article_id: str) -> List[ExtractedEntity]:
         """Extract named entities using LLM"""
-        if not self.client:
-            logger.error("LLM client not initialized - cannot extract entities")
-            return []
-        
         logger.info("Extracting entities using LLM...")
         
         prompt = f"""
@@ -261,26 +281,12 @@ class InformationExtractionAgent:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1500,
+            entities_data = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                n=1
+                max_tokens=1500,
+                output_type="json_array"
             )
-            
-            content = response.choices[0].message.content
-            logger.debug(f"Raw entity response: {content[:200]}...")
-            
-            # Try to extract JSON from response
-            try:
-                entities_data = json.loads(content)
-            except json.JSONDecodeError as e:
-                logger.warning(f"JSON parse error: {e}")
-                # Try to extract and clean JSON from response
-                entities_data = self._extract_json_from_text(content, "entities")
-                if not entities_data:
-                    return []
             
             entities = []
             for entity_data in entities_data:
@@ -474,15 +480,13 @@ class InformationExtractionAgent:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=5000,
+            result = self.llm.prompt_llm(
+                prompt=prompt,
                 temperature=0.1,
-                n=1
+                max_tokens=5000,
+                output_type="text"
             )
             
-            result = response.choices[0].message.content.strip()
             logger.debug(f"LLM date resolution result for '{date_text}': '{result}' (length: {len(result)})")
             
             # Try to parse the returned date
@@ -512,74 +516,6 @@ class InformationExtractionAgent:
             logger.warning(f"Failed to resolve date with LLM: {e}")
             return None
     
-    def _extract_json_from_text(self, text: str, data_type: str) -> List[Dict[str, Any]]:
-        """
-        Robust JSON extraction from LLM response text.
-        
-        Args:
-            text: Raw LLM response text
-            data_type: Type of data being extracted (for logging)
-            
-        Returns:
-            List of parsed JSON objects or empty list
-        """
-        import re
-        
-        # Try to find JSON array in the response
-        json_match = re.search(r'\[.*\]', text, re.DOTALL)
-        if not json_match:
-            logger.warning(f"No JSON array found in {data_type} response")
-            return []
-        
-        json_str = json_match.group(0)
-        
-        # Clean common JSON formatting issues
-        fixes = [
-            (r',\s*}', '}'),                    # Remove trailing commas in objects
-            (r',\s*]', ']'),                    # Remove trailing commas in arrays
-            (r'\\n', ' '),                      # Replace newlines in strings
-            (r'\\"', '"'),                      # Fix escaped quotes
-            (r'"\s*\n\s*"', '"'),              # Fix split strings across lines
-            (r'(\w+):', r'"\1":'),             # Quote unquoted keys (basic cases)
-        ]
-        
-        for pattern, replacement in fixes:
-            json_str = re.sub(pattern, replacement, json_str)
-        
-        # Try progressively more aggressive fixes
-        attempts = [
-            json_str,  # Original cleaned version
-            # Try to fix incomplete JSON by finding valid start
-            re.sub(r'^[^[]*(\[.*)', r'\1', json_str, flags=re.DOTALL),
-            # Try to find just the first complete object and wrap in array
-        ]
-        
-        for attempt in attempts:
-            try:
-                return json.loads(attempt)
-            except json.JSONDecodeError as e:
-                logger.debug(f"Failed to parse {data_type} JSON attempt: {e}")
-                continue
-        
-        # Last resort: try to extract individual objects
-        object_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
-        objects = re.findall(object_pattern, json_str)
-        
-        if objects:
-            parsed_objects = []
-            for obj_str in objects:
-                try:
-                    obj = json.loads(obj_str)
-                    parsed_objects.append(obj)
-                except json.JSONDecodeError:
-                    continue
-            
-            if parsed_objects:
-                logger.info(f"Recovered {len(parsed_objects)} {data_type} objects from malformed JSON")
-                return parsed_objects
-        
-        logger.warning(f"Could not parse {data_type} JSON after all attempts: {json_str[:200]}...")
-        return []
     
     def _event_to_dict(self, event: ExtractedEvent) -> Dict[str, Any]:
         """Convert ExtractedEvent to dictionary"""
