@@ -8,7 +8,7 @@ An agentic workflow for generating reports to answer user queries by constructin
 
 - Python
 - LM Studio serving an LLM and an embedding model
-- Qdrant server running at localhost:6333
+- Qdrant server
 
 ### Installation
 
@@ -18,7 +18,7 @@ pip install -r requirements.txt
 
 ### Configuration
 
-Edit `config.yaml`
+Edit `config.json`
 
 ### Running
 
@@ -35,7 +35,7 @@ python agent.py
 
 ## Article Format
 
-All articles follow this structured format, and be stored in a .txt file:
+All articles follow this structured format, and are stored in a .txt file:
 
 ```
 Title: [Article Title]
