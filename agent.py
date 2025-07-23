@@ -3,6 +3,7 @@ from qdrant_client import QdrantClient, models
 from typing import List
 import json
 from datetime import datetime
+from pathlib import Path
 
 class QuerySchema(lms.BaseModel):
     queries: List[str]
@@ -116,11 +117,11 @@ def generate_report(timeline, input, model):
 
     
 if __name__ == "__main__":
-    input = "when did linda yaccarino get hired as ceo at x?"
-
-    client = QdrantClient(url="http://localhost:6333")
-    model = lms.llm("qwen3-30b-a3b")
-    embedding_model = lms.embedding_model("text-embedding-qwen3-embedding-0.6b")
+    config = json.load(open("config.json", 'r'))
+    input = config["input"]
+    client = QdrantClient(url=config["qdrant_client_url"])
+    model = lms.llm(config["lmstudio_llm"])
+    embedding_model = lms.embedding_model(config["lmstudio_embedding"])
 
     print("GENERATING QUERIES")
     queries = generate_queries(input, model)
