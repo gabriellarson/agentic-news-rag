@@ -1,0 +1,6 @@
+Title: This is a Sample Article
+Subtitle: With a Sample Subtitle
+Authors: Sam Ple, Samp Le
+Published: 2025-05-05T12:45:55.955Z
+
+This is the content of an article. There should be an empty line separating the data above and the content of the article here.
