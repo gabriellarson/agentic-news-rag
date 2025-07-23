@@ -74,12 +74,13 @@ class TimestampSchema(lms.BaseModel):
     start_timestamp: datetime
     end_timestamp: datetime
 def resolve_timestamps(articles_events, model):
-    #resolve extracted events to exact timestamps
+    timestamped_articles_events = []
     for article_events in articles_events:
         article = article_events[0]
         events = article_events[1]
+        timestamped_events = []
+
         for event in events['events']:
-            print(event)
             resolve_timestamp_prompt = f"""Resolve the exact ISO 8601 (i.e. "2024-01-11T12:42:05.955Z") timestamps for the given article event, and article publication date.
 Be as precise as possible when resolving the date. If no date for an event can be deduced, assume it happened at the time of publication.
 If the event happened instantaneously, the start_timestamp and end_timestamp will have the exact same value. If it happened over a range of time, they will have different values that cover the range of time.
@@ -101,19 +102,96 @@ Article Publication: {article.payload["published"]}
 Event: {event["description"]}
 """
             response = model.respond(resolve_timestamp_prompt, response_format=TimestampSchema)
-            print(response)
-    timestamped_articles_events = []
+            timestamp_data = json.loads(response.content)
+            
+            timestamped_event = {
+                "entity": event["entity"],
+                "description": event["description"],
+                "start_timestamp": timestamp_data["start_timestamp"],
+                "end_timestamp": timestamp_data["end_timestamp"],
+                "article_title": article.payload["title"],
+                "article_published": article.payload["published"]
+            }
+            timestamped_events.append(timestamped_event)
+        
+        timestamped_articles_events.append({
+            "article": article,
+            "events": timestamped_events
+        })
+    
     return timestamped_articles_events
 
-#construct timeline
 def construct_timeline(timestamped_articles_events):
     timeline = []
+    
+    for article in timestamped_articles_events:
+        for event in article["events"]:
+            timeline.append(event)
+    
+    timeline.sort(key=lambda x: x["start_timestamp"])
+    
     return timeline
 
-#generate report from timeline
 def generate_report(timeline, input, model):
-    report = ""
-    return report
+    if not timeline:
+        return "No relevant events found for the given query."
+    
+    events_summary = []
+    for event in timeline:
+        event_text = f"""
+Time: {event['start_timestamp']} to {event['end_timestamp']}
+Entity: {event['entity']}
+Event: {event['description']}
+Source: {event['article_title']}"""
+        events_summary.append(event_text)
+    
+
+    generate_report_prompt = f"""Based on the following chronological timeline of events, generate a comprehensive report that answers the user's question.
+
+User's Question: {input}
+
+Timeline of Events:
+{chr(10).join(events_summary)}
+
+Create a well-structured report that:
+1. Directly addresses the user's question
+2. Synthesizes the information from multiple events
+3. Identifies key trends or patterns
+4. Highlights the most significant findings
+5. Provides a clear conclusion
+6. Cites your relevant source articles
+
+Format the report with clear sections and make it easy to read."""
+
+    response = model.respond(generate_report_prompt)
+    report = response.content
+    
+    report_with_metadata = f"""Timeline Analysis Report
+
+Query: {input}
+Generated: {datetime.now().isoformat()}
+Total Events Analyzed: {len(timeline)}
+
+---
+
+{report}
+
+---
+
+## Event Timeline Details
+
+"""
+    
+    for i, event in enumerate(timeline, 1):
+        report_with_metadata += f"""
+### Event {i}
+- **Date:** {event['start_timestamp']} to {event['end_timestamp']}
+- **Entity:** {event['entity']}
+- **Description:** {event['description']}
+- **Source:** {event['article_title']}
+"""
+    
+    return report_with_metadata
 
     
 if __name__ == "__main__":
