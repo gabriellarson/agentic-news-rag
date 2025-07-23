@@ -1,6 +1,8 @@
 {
     "input": "put your query here",
     "qdrant_client_url": "http://localhost:6333",
-    "lmstudio_llm": "qwen3-30b-a3b",
+    "qdrant_collection_name": "article-collection",
+    "articles_path": "../articles",
+    "lmstudio_llm": "qwen3-4b",
     "lmstudio_embedding": "text-embedding-qwen3-embedding-0.6b"
 }
